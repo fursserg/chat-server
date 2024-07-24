@@ -2,19 +2,24 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
+	"time"
 
-	"github.com/brianvoe/gofakeit"
+	sq "github.com/Masterminds/squirrel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
-	
+
+	"github.com/fursserg/chat-server/db"
 	chat "github.com/fursserg/chat-server/pkg/chat_v1"
 )
 
-const grpcPort = 50052
+const (
+	grpcPort = 50052
+)
 
 type server struct {
 	chat.UnimplementedChatV1Server
@@ -38,16 +43,54 @@ func main() {
 }
 
 func (s *server) Create(ctx context.Context, req *chat.CreateRequest) (*chat.CreateResponse, error) {
-	log.Printf("Chat create users ids: %+v", req.GetUserIds())
-	log.Printf("Chat create name: %s", req.GetName())
+	userIDs, err := json.Marshal(req.GetUserIds())
+	if err != nil {
+		log.Fatalf("wrong user_ids: %+v", req.GetUserIds())
+	}
+
+	builderInsert := sq.Insert("chats").
+		PlaceholderFormat(sq.Dollar).
+		Columns("title", "user_ids", "status").
+		Values(req.GetName(), userIDs, "1").
+		Suffix("RETURNING id")
+
+	query, args, err := builderInsert.ToSql()
+	if err != nil {
+		log.Fatalf("failed to build query: %v", err)
+	}
+
+	var chatID int64
+	err = db.GetInstance().QueryRow(ctx, query, args...).Scan(&chatID)
+	if err != nil {
+		log.Fatalf("failed to insert chat: %v", err)
+	}
 
 	return &chat.CreateResponse{
-		Id: gofakeit.Int64(),
+		Id: chatID,
 	}, nil
 }
 
 func (s *server) Delete(ctx context.Context, req *chat.DeleteRequest) (*emptypb.Empty, error) {
 	log.Printf("Chat delete id: %d", req.GetId())
+
+	// Вместо удаления, переводим в специальный статус (храним в БД для истории)
+	builderUpdate := sq.Update("chats").
+		PlaceholderFormat(sq.Dollar).
+		Set("status", "10").
+		Set("updated_at", time.Now()).
+		Where(sq.Eq{"id": req.GetId()})
+
+	query, args, err := builderUpdate.ToSql()
+	if err != nil {
+		log.Fatalf("failed to build query: %v", err)
+	}
+
+	res, err := db.GetInstance().Exec(ctx, query, args...)
+	if err != nil {
+		log.Fatalf("failed to update chat: %v", err)
+	}
+
+	log.Printf("updated %d rows", res.RowsAffected())
 
 	return new(emptypb.Empty), nil
 }

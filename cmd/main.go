@@ -42,7 +42,13 @@ func main() {
 	}
 }
 
+// Create Создает новый чат
 func (s *server) Create(ctx context.Context, req *chat.CreateRequest) (*chat.CreateResponse, error) {
+	status, err := db.Statuses.Get("active")
+	if err != nil {
+		log.Fatalf("failed to prepare query: %v", err)
+	}
+
 	userIDs, err := json.Marshal(req.GetUserIds())
 	if err != nil {
 		log.Fatalf("wrong user_ids: %+v", req.GetUserIds())
@@ -51,7 +57,7 @@ func (s *server) Create(ctx context.Context, req *chat.CreateRequest) (*chat.Cre
 	builderInsert := sq.Insert("chats").
 		PlaceholderFormat(sq.Dollar).
 		Columns("title", "user_ids", "status").
-		Values(req.GetName(), userIDs, "1").
+		Values(req.GetName(), userIDs, status).
 		Suffix("RETURNING id")
 
 	query, args, err := builderInsert.ToSql()
@@ -60,7 +66,7 @@ func (s *server) Create(ctx context.Context, req *chat.CreateRequest) (*chat.Cre
 	}
 
 	var chatID int64
-	err = db.GetInstance().QueryRow(ctx, query, args...).Scan(&chatID)
+	err = db.GetConnect().QueryRow(ctx, query, args...).Scan(&chatID)
 	if err != nil {
 		log.Fatalf("failed to insert chat: %v", err)
 	}
@@ -70,13 +76,17 @@ func (s *server) Create(ctx context.Context, req *chat.CreateRequest) (*chat.Cre
 	}, nil
 }
 
+// Delete Переводит чат в статус "удаленный"
 func (s *server) Delete(ctx context.Context, req *chat.DeleteRequest) (*emptypb.Empty, error) {
-	log.Printf("Chat delete id: %d", req.GetId())
+	status, err := db.Statuses.Get("deleted")
+	if err != nil {
+		log.Fatalf("failed to prepare query: %v", err)
+	}
 
 	// Вместо удаления, переводим в специальный статус (храним в БД для истории)
 	builderUpdate := sq.Update("chats").
 		PlaceholderFormat(sq.Dollar).
-		Set("status", "10").
+		Set("status", status).
 		Set("updated_at", time.Now()).
 		Where(sq.Eq{"id": req.GetId()})
 
@@ -85,7 +95,7 @@ func (s *server) Delete(ctx context.Context, req *chat.DeleteRequest) (*emptypb.
 		log.Fatalf("failed to build query: %v", err)
 	}
 
-	res, err := db.GetInstance().Exec(ctx, query, args...)
+	res, err := db.GetConnect().Exec(ctx, query, args...)
 	if err != nil {
 		log.Fatalf("failed to update chat: %v", err)
 	}
@@ -95,6 +105,7 @@ func (s *server) Delete(ctx context.Context, req *chat.DeleteRequest) (*emptypb.
 	return new(emptypb.Empty), nil
 }
 
+// SendMessage Отправляет сообщение в чат
 func (s *server) SendMessage(ctx context.Context, req *chat.SendMessageRequest) (*emptypb.Empty, error) {
 	log.Printf("Send message data: %+v", req)
 

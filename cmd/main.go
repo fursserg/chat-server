@@ -44,11 +44,6 @@ func main() {
 
 // Create Создает новый чат
 func (s *server) Create(ctx context.Context, req *chat.CreateRequest) (*chat.CreateResponse, error) {
-	status, err := db.Statuses.Get("active")
-	if err != nil {
-		log.Fatalf("failed to prepare query: %v", err)
-	}
-
 	userIDs, err := json.Marshal(req.GetUserIds())
 	if err != nil {
 		log.Fatalf("wrong user_ids: %+v", req.GetUserIds())
@@ -57,7 +52,7 @@ func (s *server) Create(ctx context.Context, req *chat.CreateRequest) (*chat.Cre
 	builderInsert := sq.Insert("chats").
 		PlaceholderFormat(sq.Dollar).
 		Columns("title", "user_ids", "status").
-		Values(req.GetName(), userIDs, status).
+		Values(req.GetName(), userIDs, db.ActiveStatus).
 		Suffix("RETURNING id")
 
 	query, args, err := builderInsert.ToSql()
@@ -78,15 +73,10 @@ func (s *server) Create(ctx context.Context, req *chat.CreateRequest) (*chat.Cre
 
 // Delete Переводит чат в статус "удаленный"
 func (s *server) Delete(ctx context.Context, req *chat.DeleteRequest) (*emptypb.Empty, error) {
-	status, err := db.Statuses.Get("deleted")
-	if err != nil {
-		log.Fatalf("failed to prepare query: %v", err)
-	}
-
 	// Вместо удаления, переводим в специальный статус (храним в БД для истории)
 	builderUpdate := sq.Update("chats").
 		PlaceholderFormat(sq.Dollar).
-		Set("status", status).
+		Set("status", db.DeletedStatus).
 		Set("updated_at", time.Now()).
 		Where(sq.Eq{"id": req.GetId()})
 
